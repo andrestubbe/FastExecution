@@ -52,7 +52,7 @@ public class ContinuousExecution extends AbstractExecution {
     // ------------------------------------------------------------------ loop
 
     /**
-     * Starts a named continuous loop at {@code hz} Hz.
+     * Starts a named continuous loop at {@code hz} Hz (integer precision).
      *
      * <p>If a loop with {@code name} is already running this call is a no-op.
      * Uses {@code FastDWM.createPeriodicTimer} when available, otherwise falls back
@@ -62,14 +62,32 @@ public class ContinuousExecution extends AbstractExecution {
      * @param hz   target frequency in Hz (e.g. 60, 120, 144, 240)
      * @param task the runnable to execute each tick
      */
-    public synchronized void loop(String name, int hz, Runnable task) {
+    public void loop(String name, int hz, Runnable task) {
+        loop(name, (double) hz, task);
+    }
+
+    /**
+     * Starts a named continuous loop at {@code hz} Hz (double precision).
+     *
+     * <p>Supports fractional rates such as {@code 29.97}, {@code 59.94}, or {@code 23.976}.
+     * Uses {@code FastDWM.createPeriodicTimer} when available (1 ms resolution), otherwise
+     * falls back to {@link java.util.concurrent.ScheduledExecutorService} with microsecond
+     * period via {@link TimeUnit#MICROSECONDS}.
+     *
+     * @param name task key
+     * @param hz   target frequency in Hz (fractional values supported)
+     * @param task the runnable to execute each tick
+     */
+    public synchronized void loop(String name, double hz, Runnable task) {
         if (exists(name)) return; // idempotent
 
-        int delayMs = Math.max(1, 1000 / hz);
+        // Convert Hz → period with full double precision
+        long periodUs = Math.max(1L, Math.round(1_000_000.0 / hz)); // microseconds
+        int  periodMs = (int) Math.max(1L, Math.round(1_000.0   / hz)); // milliseconds for WinMM
 
         if (DWM_AVAILABLE) {
             try {
-                int timerId = fastdwm.FastDWM.createPeriodicTimer(delayMs, task);
+                int timerId = fastdwm.FastDWM.createPeriodicTimer(periodMs, task);
                 register(name, timerId);
                 return;
             } catch (UnsatisfiedLinkError | NoClassDefFoundError ignored) {
@@ -77,25 +95,28 @@ public class ContinuousExecution extends AbstractExecution {
             }
         }
 
-        // Java fallback
-        var future = executor.scheduleAtFixedRate(task, 0, delayMs, TimeUnit.MILLISECONDS);
+        // Java fallback — microsecond precision via ScheduledExecutorService
+        var future = executor.scheduleAtFixedRate(task, 0, periodUs, TimeUnit.MICROSECONDS);
         register(name, future);
     }
 
     // ------------------------------------------------------------------ vsync loop
 
     /**
-     * Starts a VSync-locked loop under {@code name}.
+     * Starts a VSync-locked loop under {@code name} with a configurable software fallback Hz.
      *
      * <p>Runs on a dedicated MAX_PRIORITY daemon thread that blocks on
      * {@code FastDWM.waitForVSync()} each frame (monitor refresh rate).
-     * Falls back to a ~60 Hz software loop if FastDWM is unavailable.
+     * If FastDWM is unavailable, falls back to a software loop at {@code fallbackHz}.
      *
-     * @param name task key
-     * @param task the runnable to execute each frame
+     * @param name       task key
+     * @param fallbackHz Hz to use when FastDWM VSync is unavailable (e.g. 60, 120)
+     * @param task       the runnable to execute each frame
      */
-    public synchronized void loopVSync(String name, Runnable task) {
+    public synchronized void loopVSync(String name, int fallbackHz, Runnable task) {
         if (vsyncThreads.containsKey(name)) return; // idempotent
+
+        long fallbackMs = Math.max(1L, Math.round(1_000.0 / fallbackHz));
 
         Thread t = new Thread(() -> {
             while (!Thread.currentThread().isInterrupted()) {
@@ -103,10 +124,10 @@ public class ContinuousExecution extends AbstractExecution {
                     try {
                         fastdwm.FastDWM.waitForVSync();
                     } catch (UnsatisfiedLinkError | NoClassDefFoundError e) {
-                        sleepMs(16); // ~60 Hz fallback
+                        sleepMs(fallbackMs);
                     }
                 } else {
-                    sleepMs(16);
+                    sleepMs(fallbackMs);
                 }
                 task.run();
             }
@@ -116,6 +137,17 @@ public class ContinuousExecution extends AbstractExecution {
         t.start();
 
         vsyncThreads.put(name, t);
+    }
+
+    /**
+     * Starts a VSync-locked loop with a default software fallback of 60 Hz.
+     *
+     * @param name task key
+     * @param task the runnable to execute each frame
+     * @see #loopVSync(String, int, Runnable)
+     */
+    public void loopVSync(String name, Runnable task) {
+        loopVSync(name, 60, task);
     }
 
     // ------------------------------------------------------------------ stop

@@ -58,32 +58,57 @@ public final class FastExecution {
     // ------------------------------------------------------------------ loop
 
     /**
-     * Starts a continuous loop at the specified Hz under {@code name}.
-     *
-     * <p>Uses {@code FastDWM.createPeriodicTimer} (Windows Multimedia Timer, ~1 ms jitter)
-     * when available, falling back to {@link java.util.concurrent.ScheduledExecutorService}
-     * (~15 ms jitter). Idempotent: calling with an existing name is a no-op.
+     * Starts a continuous loop at the specified Hz under {@code name} (integer precision).
      *
      * @param name task key
      * @param hz   target frequency (e.g. 60, 120, 144, 240)
      * @param task the runnable to execute each tick
+     * @see #loop(String, double, Runnable)
      */
     public static void loop(String name, int hz, Runnable task) {
         LOOPS.loop(name, hz, task);
     }
 
     /**
-     * Starts a VSync-locked loop under {@code name}.
+     * Starts a continuous loop at the specified Hz under {@code name} (double precision).
      *
-     * <p>Runs on a dedicated {@link Thread#MAX_PRIORITY} daemon thread that blocks on
-     * {@code FastDWM.waitForVSync()} each frame. Falls back to ~60 Hz if FastDWM is
-     * unavailable. Idempotent: calling with an existing name is a no-op.
+     * <p>Supports fractional rates such as {@code 29.97}, {@code 59.94}, or {@code 23.976}.
+     * Uses {@code FastDWM.createPeriodicTimer} when available (1 ms resolution), otherwise
+     * falls back to microsecond-precision {@link java.util.concurrent.ScheduledExecutorService}.
+     * Idempotent: calling with an existing name is a no-op.
+     *
+     * @param name task key
+     * @param hz   target frequency in Hz (fractional values supported)
+     * @param task the runnable to execute each tick
+     */
+    public static void loop(String name, double hz, Runnable task) {
+        LOOPS.loop(name, hz, task);
+    }
+
+    /**
+     * Starts a VSync-locked loop under {@code name} with a default 60 Hz software fallback.
      *
      * @param name task key
      * @param task the runnable to execute each frame
+     * @see #loopVSync(String, int, Runnable)
      */
     public static void loopVSync(String name, Runnable task) {
         LOOPS.loopVSync(name, task);
+    }
+
+    /**
+     * Starts a VSync-locked loop under {@code name} with a configurable software fallback Hz.
+     *
+     * <p>Runs on a dedicated {@link Thread#MAX_PRIORITY} daemon thread that blocks on
+     * {@code FastDWM.waitForVSync()} each frame. When FastDWM is unavailable, falls back
+     * to a software loop at {@code fallbackHz}.
+     *
+     * @param name       task key
+     * @param fallbackHz Hz to use when FastDWM VSync is unavailable (e.g. 60, 120)
+     * @param task       the runnable to execute each frame
+     */
+    public static void loopVSync(String name, int fallbackHz, Runnable task) {
+        LOOPS.loopVSync(name, fallbackHz, task);
     }
 
     // ------------------------------------------------------------------ stop
