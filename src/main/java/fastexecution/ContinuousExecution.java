@@ -115,6 +115,7 @@ public class ContinuousExecution extends AbstractExecution {
      * @param task       the runnable to execute each frame
      */
     public synchronized void loopVSync(String name, int fallbackHz, Runnable task) {
+        if (fallbackHz <= 0) throw new IllegalArgumentException("fallbackHz must be > 0, got: " + fallbackHz);
         if (vsyncThreads.containsKey(name)) return; // idempotent
 
         long fallbackMs = Math.max(1L, Math.round(1_000.0 / fallbackHz));
