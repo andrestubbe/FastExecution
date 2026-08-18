@@ -79,6 +79,7 @@ public class ContinuousExecution extends AbstractExecution {
      * @param task the runnable to execute each tick
      */
     public synchronized void loop(String name, double hz, Runnable task) {
+        if (hz <= 0) throw new IllegalArgumentException("hz must be > 0, got: " + hz);
         if (exists(name)) return; // idempotent
 
         // Convert Hz → period with full double precision
