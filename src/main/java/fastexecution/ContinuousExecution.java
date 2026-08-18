@@ -1,117 +1,159 @@
 package fastexecution;
 
-import java.util.concurrent.ScheduledFuture;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 /**
  * Named, idempotent configurable-Hz continuous loop engine.
  *
- * <p>Three heartbeat modes are available, selected automatically by capability:
- * <ol>
- *   <li><b>NATIVE_MM</b> — {@code FastDWM.beginTimerPeriod(1)} + {@code createPeriodicTimer}.
- *       Achieves ~1 ms jitter. Used when {@code fastdwm.dll} is loaded.</li>
- *   <li><b>JAVA</b> — {@link java.util.concurrent.ScheduledExecutorService#scheduleAtFixedRate}.
- *       Fallback when FastDWM is unavailable. ~15 ms OS-default jitter on Windows.</li>
- *   <li><b>NATIVE_VSYNC</b> — dedicated daemon thread blocking on {@code FastDWM.waitForVSync()}.
- *       Frame-perfect heartbeat at the monitor refresh rate. See {@link #loopVSync}.</li>
- * </ol>
+ * <p>Wraps either a native {@code FastDWM.createPeriodicTimer} callback (Windows Multimedia
+ * Timer — ~1 ms jitter) or a {@link java.util.concurrent.ScheduledExecutorService} fallback
+ * (~15 ms jitter with default OS timer resolution). The native path is preferred and
+ * activated automatically when the FastDWM native library is available.
  *
- * <p>Calling {@link #loop} or {@link #loopVSync} with a name that is already active is a
- * <b>no-op</b>. Call {@link AbstractExecution#abort(String)} to stop a running loop.
+ * <pre>{@code
+ * ContinuousExecution exec = new ContinuousExecution();
+ *
+ * // Start a named 120 Hz loop
+ * exec.loop("render", 120, () -> scene.tick());
+ *
+ * // Same name — idempotent, no duplicate loop
+ * exec.loop("render", 120, () -> scene.tick());
+ *
+ * // Stop it
+ * exec.abort("render");
+ * }</pre>
+ *
+ * <p>VSync-locked loops run on a dedicated daemon thread that blocks on
+ * {@code FastDWM.waitForVSync()} each frame. If FastDWM is unavailable the thread
+ * falls back to a 60 Hz software loop.
  */
-class ContinuousExecution extends AbstractExecution {
+public class ContinuousExecution extends AbstractExecution {
 
-    /** Whether FastDWM native timers are available on this runtime. */
-    private static final boolean NATIVE_AVAILABLE = probeNative();
+    /** Whether the FastDWM native library loaded successfully. */
+    private static final boolean DWM_AVAILABLE;
 
-    private static boolean probeNative() {
+    /** Daemon threads for VSync-locked loops: name → thread. */
+    private final Map<String, Thread> vsyncThreads = new HashMap<>();
+
+    static {
+        boolean available = false;
         try {
-            // Attempt a zero-overhead probe: beginTimerPeriod with 0 returns false but doesn't throw
-            fastdwm.FastDWM.beginTimerPeriod(1);
-            fastdwm.FastDWM.endTimerPeriod(1);
-            return true;
-        } catch (UnsatisfiedLinkError | NoClassDefFoundError e) {
-            return false;
+            Class.forName("fastdwm.FastDWM");
+            fastdwm.FastDWM.beginTimerPeriod(1); // raise Windows timer resolution to 1 ms
+            available = true;
+        } catch (ClassNotFoundException | UnsatisfiedLinkError | NoClassDefFoundError ignored) {
+            // FastDWM not on classpath or DLL not found — use ScheduledExecutorService fallback
         }
+        DWM_AVAILABLE = available;
     }
 
     // ------------------------------------------------------------------ loop
 
     /**
-     * Starts a named continuous loop at the specified frequency.
+     * Starts a named continuous loop at {@code hz} Hz.
      *
-     * <p>Uses {@code FastDWM.createPeriodicTimer} (WinMM {@code timeSetEvent}) when available
-     * for ~1 ms precision; falls back to {@code ScheduledExecutorService} otherwise.
+     * <p>If a loop with {@code name} is already running this call is a no-op.
+     * Uses {@code FastDWM.createPeriodicTimer} when available, otherwise falls back
+     * to {@link java.util.concurrent.ScheduledExecutorService}.
      *
-     * @param name unique key for this loop
-     * @param hz   target frequency in Hertz (e.g. 60, 120, 144)
-     * @param task task to execute each tick
+     * @param name task key
+     * @param hz   target frequency in Hz (e.g. 60, 120, 144, 240)
+     * @param task the runnable to execute each tick
      */
-    static void loop(String name, int hz, Runnable task) {
-        if (exists(name)) return;
+    public synchronized void loop(String name, int hz, Runnable task) {
+        if (exists(name)) return; // idempotent
 
-        int periodMs = Math.max(1, 1_000 / hz);
+        int delayMs = Math.max(1, 1000 / hz);
 
-        if (NATIVE_AVAILABLE) {
-            loopNative(name, periodMs, task);
-        } else {
-            loopJava(name, periodMs, task);
+        if (DWM_AVAILABLE) {
+            try {
+                int timerId = fastdwm.FastDWM.createPeriodicTimer(delayMs, task);
+                register(name, timerId);
+                return;
+            } catch (UnsatisfiedLinkError | NoClassDefFoundError ignored) {
+                // fall through to Java fallback
+            }
+        }
+
+        // Java fallback
+        var future = executor.scheduleAtFixedRate(task, 0, delayMs, TimeUnit.MILLISECONDS);
+        register(name, future);
+    }
+
+    // ------------------------------------------------------------------ vsync loop
+
+    /**
+     * Starts a VSync-locked loop under {@code name}.
+     *
+     * <p>Runs on a dedicated MAX_PRIORITY daemon thread that blocks on
+     * {@code FastDWM.waitForVSync()} each frame (monitor refresh rate).
+     * Falls back to a ~60 Hz software loop if FastDWM is unavailable.
+     *
+     * @param name task key
+     * @param task the runnable to execute each frame
+     */
+    public synchronized void loopVSync(String name, Runnable task) {
+        if (vsyncThreads.containsKey(name)) return; // idempotent
+
+        Thread t = new Thread(() -> {
+            while (!Thread.currentThread().isInterrupted()) {
+                if (DWM_AVAILABLE) {
+                    try {
+                        fastdwm.FastDWM.waitForVSync();
+                    } catch (UnsatisfiedLinkError | NoClassDefFoundError e) {
+                        sleepMs(16); // ~60 Hz fallback
+                    }
+                } else {
+                    sleepMs(16);
+                }
+                task.run();
+            }
+        }, "FastExecution-VSync-" + name);
+        t.setDaemon(true);
+        t.setPriority(Thread.MAX_PRIORITY);
+        t.start();
+
+        vsyncThreads.put(name, t);
+    }
+
+    // ------------------------------------------------------------------ stop
+
+    /**
+     * Stops a running loop or VSync loop by name.
+     */
+    @Override
+    public synchronized void abort(String name) {
+        super.abort(name);
+        Thread vt = vsyncThreads.remove(name);
+        if (vt != null) vt.interrupt();
+    }
+
+    /**
+     * Stops all running loops.
+     */
+    @Override
+    public synchronized void abortAll() {
+        super.abortAll();
+        vsyncThreads.values().forEach(Thread::interrupt);
+        vsyncThreads.clear();
+    }
+
+    // ------------------------------------------------------------------ util
+
+    private static void sleepMs(long ms) {
+        try {
+            Thread.sleep(ms);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 
     /**
-     * Starts a VSync-locked loop: fires once per monitor refresh via
-     * {@code FastDWM.waitForVSync()} on a dedicated daemon thread.
-     *
-     * @param name unique key for this loop
-     * @param task task to execute each VSync pulse
+     * Returns {@code true} if FastDWM native precision timers are active.
      */
-    static void loopVSync(String name, Runnable task) {
-        if (exists(name)) return;
-
-        Thread thread = new Thread(() -> {
-            while (!Thread.currentThread().isInterrupted()) {
-                try {
-                    fastdwm.FastDWM.waitForVSync();
-                    task.run();
-                } catch (UnsatisfiedLinkError e) {
-                    // FastDWM not available — degrade to ~60Hz Java sleep
-                    sleepMs(16);
-                    task.run();
-                } catch (Exception ignored) {}
-            }
-        }, "FastExecution-VSync-" + name);
-        thread.setDaemon(true);
-        thread.setPriority(Thread.MAX_PRIORITY);
-        thread.start();
-
-        registerVSyncThread(name, thread);
-    }
-
-    // ------------------------------------------------------------------ private
-
-    /** Native WinMM path: FastDWM.createPeriodicTimer → ~1 ms jitter. */
-    private static void loopNative(String name, int periodMs, Runnable task) {
-        try {
-            fastdwm.FastDWM.beginTimerPeriod(1);
-            int timerId = fastdwm.FastDWM.createPeriodicTimer(periodMs, () -> {
-                try { task.run(); } catch (Exception ignored) {}
-            });
-            registerNativeTimer(name, timerId);
-        } catch (UnsatisfiedLinkError e) {
-            loopJava(name, periodMs, task);
-        }
-    }
-
-    /** Java fallback: ScheduledExecutorService at fixed rate. */
-    private static void loopJava(String name, int periodMs, Runnable task) {
-        ScheduledFuture<?> future = executor().scheduleAtFixedRate(() -> {
-            try { task.run(); } catch (Exception ignored) {}
-        }, 0, periodMs, TimeUnit.MILLISECONDS);
-        registerFuture(name, future);
-    }
-
-    private static void sleepMs(long ms) {
-        try { Thread.sleep(ms); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+    public static boolean isNativeAvailable() {
+        return DWM_AVAILABLE;
     }
 }

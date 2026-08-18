@@ -1,47 +1,53 @@
 package fastexecution;
 
-import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Named, idempotent one-shot timer.
+ * Named, idempotent one-shot task scheduler.
  *
- * <p>Calling {@link #delay} with a name that is already pending is a <b>no-op</b> — the running
- * task is neither cancelled nor rescheduled. This makes it safe to call from any hot path
- * without manual future tracking or synchronization in the caller.
+ * <p>Calling {@link #delay(String, double, Runnable)} schedules a task under a string key.
+ * If a task with that key is already pending, the second call is silently ignored — the
+ * existing task is not rescheduled and not cancelled. This makes {@code DelayedExecution}
+ * the correct primitive for debounce patterns:
  *
- * <p>Example — debounce auto-save to fire 1 second after the last keystroke:
  * <pre>{@code
- * textField.addKeyListener(e -> DelayedExecution.delay("autosave", 1.0, this::saveDocument));
+ * // Only the first call takes effect — ideal for auto-save debouncing:
+ * DelayedExecution.delay("autosave", 2.0, this::save);
+ * DelayedExecution.delay("autosave", 2.0, this::save); // no-op
  * }</pre>
  *
- * <p>Uses the shared {@link AbstractExecution#executor()} (2-thread daemon pool). The task
- * is removed from the registry automatically after it fires, so calling {@code delay()} again
- * after completion schedules a fresh timer.
+ * <p>When the delay fires, the task name is removed from the registry before the
+ * {@link Runnable} is invoked, so re-scheduling inside the callback is safe.
  */
-class DelayedExecution extends AbstractExecution {
+public class DelayedExecution extends AbstractExecution {
 
     /**
-     * Schedules {@code task} to run once after {@code delaySeconds}, keyed by {@code name}.
-     * If a task with this name is already pending, the call is silently ignored.
+     * Schedules {@code task} to run after {@code delaySeconds} seconds under {@code name}.
      *
-     * @param name         unique key for this task — used for idempotency and cancellation
-     * @param delaySeconds delay before the task fires, in seconds (fractional values supported)
-     * @param task         the task to execute once
+     * <p>If a task with {@code name} is already pending this call is a no-op.
+     * The task is automatically unregistered before it runs.
+     *
+     * @param name         unique task key
+     * @param delaySeconds delay in seconds (fractional values supported)
+     * @param task         the runnable to execute
      */
-    static void delay(String name, double delaySeconds, Runnable task) {
-        if (exists(name)) return;
+    public synchronized void delay(String name, double delaySeconds, Runnable task) {
+        if (exists(name)) return; // idempotent — already pending
 
-        long delayMs = Math.max(0, Math.round(delaySeconds * 1_000.0));
+        long delayMs = Math.max(1L, Math.round(delaySeconds * 1000.0));
 
-        ScheduledFuture<?> future = executor().schedule(() -> {
-            try {
-                task.run();
-            } finally {
-                abort(name); // clean registry entry after firing
-            }
+        var future = executor.schedule(() -> {
+            unregister(name);
+            task.run();
         }, delayMs, TimeUnit.MILLISECONDS);
 
-        registerFuture(name, future);
+        register(name, future);
+    }
+
+    /**
+     * Returns {@code true} if a task with {@code name} is currently pending.
+     */
+    public boolean isPending(String name) {
+        return exists(name);
     }
 }

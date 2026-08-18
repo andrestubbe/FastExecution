@@ -2,103 +2,88 @@ package fastexecution;
 
 import java.util.HashMap;
 import java.util.Map;
-import java.util.concurrent.*;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * Shared infrastructure for named, idempotent task scheduling.
+ * Shared infrastructure for named, idempotent task execution.
  *
- * <p>Maintains:
- * <ul>
- *   <li>A shared 2-thread daemon {@link ScheduledExecutorService} for Java-side timed tasks.</li>
- *   <li>A {@code Map<String, ScheduledFuture<?>>} for Java-scheduled tasks.</li>
- *   <li>A {@code Map<String, Integer>} for native FastDWM timer handles.</li>
- * </ul>
+ * <p>Maintains a single 2-thread {@link ScheduledExecutorService} daemon pool and a
+ * name → handle registry. Handles are either {@link ScheduledFuture} instances (Java-mode)
+ * or {@link Integer} timer IDs returned by {@code FastDWM.createPeriodicTimer} (native-mode).
  *
- * <p>All map operations are synchronized. The maps are only accessed during
- * {@code delay()}, {@code loop()}, {@code stop()} — never inside the task hot-path.
+ * <p>All registry operations are {@code synchronized} on {@code this} for thread safety.
  */
 abstract class AbstractExecution {
 
-    private static final ScheduledExecutorService EXECUTOR =
-            Executors.newScheduledThreadPool(2, r -> {
-                Thread t = new Thread(r, "FastExecution-Worker");
-                t.setDaemon(true);
-                t.setPriority(Thread.MAX_PRIORITY);
-                return t;
-            });
+    /** Shared daemon thread pool — 2 threads cover delay + loop concurrently. */
+    protected final ScheduledExecutorService executor = Executors.newScheduledThreadPool(2, r -> {
+        Thread t = new Thread(r, "FastExecution-" + THREAD_INDEX.incrementAndGet());
+        t.setDaemon(true);
+        return t;
+    });
 
-    /** Java ScheduledFuture registry (delays and Java-mode loops). */
-    private static final Map<String, ScheduledFuture<?>> FUTURES = new HashMap<>();
+    /** Maps task name → ScheduledFuture (Java) or Integer timer-id (FastDWM native). */
+    protected final Map<String, Object> handles = new HashMap<>();
 
-    /** Native FastDWM periodic timer ID registry. */
-    private static final Map<String, Integer> NATIVE_TIMERS = new HashMap<>();
+    private static final AtomicInteger THREAD_INDEX = new AtomicInteger(0);
 
-    /** Daemon VSync thread registry. */
-    private static final Map<String, Thread> VSYNC_THREADS = new HashMap<>();
+    // ------------------------------------------------------------------ registry
 
-    // ------------------------------------------------------------------ query
+    /**
+     * Returns {@code true} if a task with the given name is currently registered.
+     */
+    public synchronized boolean exists(String name) {
+        return handles.containsKey(name);
+    }
 
-    static synchronized boolean exists(String name) {
-        if (VSYNC_THREADS.containsKey(name)) {
-            return VSYNC_THREADS.get(name).isAlive();
+    /**
+     * Cancels and removes the task with the given name.
+     * No-op if no such task exists.
+     */
+    public synchronized void abort(String name) {
+        Object h = handles.remove(name);
+        cancelHandle(h);
+    }
+
+    /**
+     * Cancels and removes all currently registered tasks.
+     */
+    public synchronized void abortAll() {
+        for (Object h : handles.values()) {
+            cancelHandle(h);
         }
-        if (NATIVE_TIMERS.containsKey(name)) {
-            return true; // native timers run until killed
-        }
-        ScheduledFuture<?> f = FUTURES.get(name);
-        return f != null && !f.isDone() && !f.isCancelled();
+        handles.clear();
     }
 
-    // ------------------------------------------------------------------ registration
+    // ------------------------------------------------------------------ internals
 
-    static synchronized void registerFuture(String name, ScheduledFuture<?> future) {
-        FUTURES.put(name, future);
+    protected synchronized void register(String name, ScheduledFuture<?> future) {
+        Object prev = handles.put(name, future);
+        if (prev != null) cancelHandle(prev); // replace stale handle
     }
 
-    static synchronized void registerNativeTimer(String name, int timerId) {
-        NATIVE_TIMERS.put(name, timerId);
+    protected synchronized void register(String name, int nativeTimerId) {
+        Object prev = handles.put(name, nativeTimerId);
+        if (prev != null) cancelHandle(prev);
     }
 
-    static synchronized void registerVSyncThread(String name, Thread thread) {
-        VSYNC_THREADS.put(name, thread);
+    protected synchronized void unregister(String name) {
+        handles.remove(name);
     }
 
-    // ------------------------------------------------------------------ cancellation
-
-    static synchronized void abort(String name) {
-        // Cancel Java future
-        ScheduledFuture<?> f = FUTURES.remove(name);
-        if (f != null) f.cancel(false);
-
-        // Kill native FastDWM timer
-        Integer timerId = NATIVE_TIMERS.remove(name);
-        if (timerId != null) {
+    private void cancelHandle(Object h) {
+        if (h instanceof ScheduledFuture<?> f) {
+            f.cancel(false);
+        } else if (h instanceof Integer id) {
             try {
-                fastdwm.FastDWM.killTimer(timerId);
-            } catch (UnsatisfiedLinkError ignored) {}
+                fastdwm.FastDWM.killTimer(id);
+            } catch (UnsatisfiedLinkError | NoClassDefFoundError ignored) {
+                // FastDWM native not available — timer already expired or never started
+            }
         }
-
-        // Interrupt VSync thread
-        Thread vsync = VSYNC_THREADS.remove(name);
-        if (vsync != null) vsync.interrupt();
-    }
-
-    static synchronized void abortAll() {
-        FUTURES.values().forEach(f -> f.cancel(false));
-        FUTURES.clear();
-
-        NATIVE_TIMERS.forEach((name, id) -> {
-            try { fastdwm.FastDWM.killTimer(id); } catch (UnsatisfiedLinkError ignored) {}
-        });
-        NATIVE_TIMERS.clear();
-
-        VSYNC_THREADS.values().forEach(Thread::interrupt);
-        VSYNC_THREADS.clear();
-    }
-
-    // ------------------------------------------------------------------ accessor
-
-    static ScheduledExecutorService executor() {
-        return EXECUTOR;
     }
 }

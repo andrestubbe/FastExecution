@@ -1,103 +1,128 @@
 package fastexecution;
 
 /**
- * FastExecution — Named, idempotent task scheduling and precision loop execution.
+ * Static façade for the FastExecution scheduling engine.
  *
- * <p>Static facade over {@link DelayedExecution} and {@link ContinuousExecution}.
- * All methods are thread-safe and idempotent by name.
+ * <p>Provides three named, idempotent scheduling primitives backed by
+ * {@link DelayedExecution} and {@link ContinuousExecution}:
  *
- * <p><b>Delay (debounce):</b>
+ * <ul>
+ *   <li>{@link #delay(String, double, Runnable)} — debounced one-shot timer</li>
+ *   <li>{@link #loop(String, int, Runnable)} — configurable-Hz continuous loop</li>
+ *   <li>{@link #loopVSync(String, Runnable)} — VSync-locked frame loop</li>
+ * </ul>
+ *
+ * <p>All operations are thread-safe. Names serve as unique keys — scheduling the same
+ * name twice is always a no-op for the second call.
+ *
  * <pre>{@code
- * FastExecution.delay("autosave", 1.0, () -> save());
- * FastExecution.delay("autosave", 1.0, () -> save()); // no-op — already pending
- * }</pre>
+ * // Debounce: auto-save fires 2 s after the last keystroke
+ * FastExecution.delay("autosave", 2.0, editor::save);
  *
- * <p><b>Precision loop at 120 Hz:</b>
- * <pre>{@code
- * FastExecution.loop("render", 120, () -> render());
- * // ... later:
+ * // 120 Hz render loop via FastDWM native timer (1 ms precision)
+ * FastExecution.loop("render", 120, scene::tick);
+ *
+ * // Frame-locked VSync loop
+ * FastExecution.loopVSync("ui", renderer::paint);
+ *
+ * // Cancel by name
  * FastExecution.stop("render");
- * }</pre>
  *
- * <p><b>VSync-locked loop (monitor refresh rate):</b>
- * <pre>{@code
- * FastExecution.loopVSync("vsync-render", () -> render());
+ * // Cancel everything
+ * FastExecution.stopAll();
  * }</pre>
  */
 public final class FastExecution {
+
+    private static final DelayedExecution    DELAYS = new DelayedExecution();
+    private static final ContinuousExecution LOOPS  = new ContinuousExecution();
 
     private FastExecution() {}
 
     // ------------------------------------------------------------------ delay
 
     /**
-     * Schedules a one-shot task to fire after {@code delaySeconds}.
-     * No-op if a task with this {@code name} is already pending.
+     * Schedules a one-shot task after {@code delaySeconds} seconds under {@code name}.
+     *
+     * <p>Idempotent: if a delay task with {@code name} is already pending, this call
+     * is silently ignored. The task is automatically unregistered before it fires.
      *
      * @param name         unique task key
-     * @param delaySeconds delay in seconds (fractional values supported, e.g. {@code 0.5})
-     * @param task         task to execute once
+     * @param delaySeconds delay in seconds (supports fractions)
+     * @param task         the runnable to execute once
      */
     public static void delay(String name, double delaySeconds, Runnable task) {
-        DelayedExecution.delay(name, delaySeconds, task);
+        DELAYS.delay(name, delaySeconds, task);
     }
 
     // ------------------------------------------------------------------ loop
 
     /**
-     * Starts a continuous loop at the given frequency using the best available timer.
+     * Starts a continuous loop at the specified Hz under {@code name}.
      *
-     * <p>Automatically selects:
-     * <ul>
-     *   <li><b>FastDWM native</b> (WinMM {@code timeSetEvent}) — ~1 ms jitter when {@code fastdwm.dll} is present.</li>
-     *   <li><b>Java fallback</b> ({@code ScheduledExecutorService}) — ~15 ms OS-default jitter otherwise.</li>
-     * </ul>
+     * <p>Uses {@code FastDWM.createPeriodicTimer} (Windows Multimedia Timer, ~1 ms jitter)
+     * when available, falling back to {@link java.util.concurrent.ScheduledExecutorService}
+     * (~15 ms jitter). Idempotent: calling with an existing name is a no-op.
      *
-     * @param name unique loop key
-     * @param hz   target frequency in Hertz (e.g. {@code 60}, {@code 120}, {@code 144})
-     * @param task task to execute each tick
+     * @param name task key
+     * @param hz   target frequency (e.g. 60, 120, 144, 240)
+     * @param task the runnable to execute each tick
      */
     public static void loop(String name, int hz, Runnable task) {
-        ContinuousExecution.loop(name, hz, task);
+        LOOPS.loop(name, hz, task);
     }
 
     /**
-     * Starts a VSync-locked loop that fires once per monitor refresh via
-     * {@code FastDWM.waitForVSync()} on a dedicated daemon thread.
+     * Starts a VSync-locked loop under {@code name}.
      *
-     * @param name unique loop key
-     * @param task task to execute each VSync pulse
+     * <p>Runs on a dedicated {@link Thread#MAX_PRIORITY} daemon thread that blocks on
+     * {@code FastDWM.waitForVSync()} each frame. Falls back to ~60 Hz if FastDWM is
+     * unavailable. Idempotent: calling with an existing name is a no-op.
+     *
+     * @param name task key
+     * @param task the runnable to execute each frame
      */
     public static void loopVSync(String name, Runnable task) {
-        ContinuousExecution.loopVSync(name, task);
+        LOOPS.loopVSync(name, task);
     }
 
-    // ------------------------------------------------------------------ control
+    // ------------------------------------------------------------------ stop
 
     /**
-     * Stops and removes the task or loop identified by {@code name}.
-     * Safe to call even if the name is not active (no-op).
+     * Cancels a delay, loop, or VSync loop by name.
+     * No-op if no task with {@code name} exists.
      *
      * @param name task key to cancel
      */
     public static void stop(String name) {
-        AbstractExecution.abort(name);
+        DELAYS.abort(name);
+        LOOPS.abort(name);
     }
 
     /**
-     * Stops all active delays and loops.
+     * Cancels all active delays, loops, and VSync loops.
      */
     public static void stopAll() {
-        AbstractExecution.abortAll();
+        DELAYS.abortAll();
+        LOOPS.abortAll();
+    }
+
+    // ------------------------------------------------------------------ query
+
+    /**
+     * Returns {@code true} if a delay or loop task with {@code name} is currently active.
+     *
+     * @param name task key to query
+     */
+    public static boolean isActive(String name) {
+        return DELAYS.exists(name) || LOOPS.exists(name);
     }
 
     /**
-     * Returns {@code true} if a task or loop with this {@code name} is currently active.
-     *
-     * @param name task key to query
-     * @return {@code true} if active
+     * Returns {@code true} if FastDWM native precision timers are available on this system.
+     * When {@code false}, the engine falls back to Java's {@link java.util.concurrent.ScheduledExecutorService}.
      */
-    public static boolean isActive(String name) {
-        return AbstractExecution.exists(name);
+    public static boolean isNativeAvailable() {
+        return ContinuousExecution.isNativeAvailable();
     }
 }
