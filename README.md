@@ -216,6 +216,7 @@ dependencies {
 
 ## Documentation
 
+- **[COMPILE.md](docs/COMPILE.md)**: Full compilation and build guide.
 - **[REFERENCE.md](docs/REFERENCE.md)**: Full API specification and timing contract details.
 - **[PHILOSOPHY.md](docs/PHILOSOPHY.md)**: Why named idempotency and native precision timers matter.
 - **[CHANGELOG.md](docs/CHANGELOG.md)**: Version history.
