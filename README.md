@@ -152,11 +152,12 @@ boolean FastExecution.isActive(String name);
 
 ## Technical Examples & Hero Demos
 
-| Case | Java Example | JMH Benchmark |
-|---|---|---|
-| **Named Delay / Debounce** | [DelayDemo.java](examples/Demo/src/main/java/fastexecution/DelayDemo.java) | [DelayBenchmark.java](examples/Benchmark/src/main/java/fastexecution/benchmark/DelayBenchmark.java) |
-| **120 Hz Precision Loop** | [LoopDemo.java](examples/Demo/src/main/java/fastexecution/LoopDemo.java) | [LoopBenchmark.java](examples/Benchmark/src/main/java/fastexecution/benchmark/LoopBenchmark.java) |
-| **VSync-Locked Loop** | [VSyncDemo.java](examples/Demo/src/main/java/fastexecution/VSyncDemo.java) | — |
+| Case | Java Example | Launcher | Description |
+|---|---|---|---|
+| **Named Delay / Debounce** | [DelayDemo.java](examples/Demo/src/main/java/fastexecution/DelayDemo.java) | `run-delay-demo.bat` | Idempotent one-shot timer and debounce primitive under rapid repeat invocations. |
+| **120 Hz Precision Loop** | [LoopDemo.java](examples/Demo/src/main/java/fastexecution/LoopDemo.java) | `run-loop-demo.bat` | High-frequency 120 Hz game/render loop backed by FastDWM native multimedia timers. |
+| **VSync-Locked Loop** | [VSyncDemo.java](examples/Demo/src/main/java/fastexecution/VSyncDemo.java) | `run-vsync-demo.bat` | Hardware-locked render ticks synchronized to physical monitor vertical blank pulses. |
+| **JMH Microbenchmark Suite** | [LoopBenchmark.java](examples/Benchmark/src/main/java/fastexecution/benchmark/LoopBenchmark.java) | `run-benchmark.bat` | OpenJDK JMH throughput suite measuring scheduling latency and jitter freedom. |
 
 ---
 
