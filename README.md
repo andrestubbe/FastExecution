@@ -41,15 +41,15 @@ public class Demo {
 
 ---
 
-## Table of Contents
+## 📑 Table of Contents
 
 - [Why FastExecution?](#why-fastexecution)
 - [Key Features](#key-features)
 - [Performance Benchmarks](#performance-benchmarks)
 - [FastJava Native Memory & Hardware Substrate](#fastjava-native-memory--hardware-substrate)
 - [API Quick Reference](#api-quick-reference)
-- [Installation](#installation)
 - [Technical Examples & Hero Demos](#technical-examples--hero-demos)
+- [Installation](#installation)
 - [Documentation](#documentation)
 - [Platform Support](#platform-support)
 - [License](#license)
@@ -146,6 +146,16 @@ boolean FastExecution.isActive(String name);
 
 ---
 
+## Technical Examples & Hero Demos
+
+| Case | Java Example | JMH Benchmark |
+|---|---|---|
+| **Named Delay / Debounce** | [DelayDemo.java](examples/Demo/src/main/java/fastexecution/DelayDemo.java) | [DelayBenchmark.java](examples/Benchmark/src/main/java/fastexecution/benchmark/DelayBenchmark.java) |
+| **120 Hz Precision Loop** | [LoopDemo.java](examples/Demo/src/main/java/fastexecution/LoopDemo.java) | [LoopBenchmark.java](examples/Benchmark/src/main/java/fastexecution/benchmark/LoopBenchmark.java) |
+| **VSync-Locked Loop** | [VSyncDemo.java](examples/Demo/src/main/java/fastexecution/VSyncDemo.java) | — |
+
+---
+
 ## Installation
 
 ### Option 1: Maven (Recommended)
@@ -159,7 +169,6 @@ Add the JitPack repository and the dependencies to your `pom.xml`:
         <url>https://jitpack.io</url>
     </repository>
 </repositories>
-
 <dependencies>
     <!-- FastExecution -->
     <dependency>
@@ -199,18 +208,8 @@ dependencies {
 ### Option 3: Direct Download (No Build Tool)
 
 1. 📦 [**FastExecution-0.1.0.jar**](https://github.com/andrestubbe/FastExecution/releases/download/0.1.0/FastExecution-0.1.0.jar)
-2. 📦 [**fastdwm-0.1.0.jar**](https://github.com/andrestubbe/FastDWM/releases/download/0.1.0/fastdwm-0.1.0.jar) *(Required for precision timers)*
+2. 📦 [**FastDWM-0.1.0.jar**](https://github.com/andrestubbe/FastDWM/releases/download/0.1.0/FastDWM-0.1.0.jar) *(Required for precision timers)*
 3. ⚙️ [**fastcore-0.1.0.jar**](https://github.com/andrestubbe/FastCore/releases/download/0.1.0/fastcore-0.1.0.jar) *(Required native JNI loader)*
-
----
-
-## Technical Examples & Hero Demos
-
-| Case | Java Example | JMH Benchmark |
-|------|--------------|---------------|
-| Named Delay / Debounce | [DelayDemo.java](examples/Demo/src/main/java/fastexecution/DelayDemo.java) | [DelayBenchmark.java](examples/Benchmark/src/main/java/fastexecution/benchmark/DelayBenchmark.java) |
-| 120 Hz Precision Loop | [LoopDemo.java](examples/Demo/src/main/java/fastexecution/LoopDemo.java) | [LoopBenchmark.java](examples/Benchmark/src/main/java/fastexecution/benchmark/LoopBenchmark.java) |
-| VSync-Locked Loop | [VSyncDemo.java](examples/Demo/src/main/java/fastexecution/VSyncDemo.java) | — |
 
 ---
 
