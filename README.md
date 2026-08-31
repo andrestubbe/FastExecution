@@ -17,13 +17,16 @@ sub-millisecond scheduling precision and configurable Hz loops without GC pressu
 
 It is the foundation that powers **[FastAnimation](https://github.com/andrestubbe/FastAnimation)**'s
 `AnimationEngine` heartbeat and provides the debounce, delay, and continuous loop primitives needed by any
-high-performance Java application.
+[![FastExecution Showcase](docs/screenshot.png)](https://youtu.be/BZsqQl7WqWk)
+
+---
+
+## Quick Start
 
 ```java
-// Quick Start — Example
 import fastexecution.FastExecution;
 
-public class Demo {
+public class Example {
     public static void main(String[] args) throws InterruptedException {
         // Named idempotent delay — fires only once even if called 100× in rapid succession
         FastExecution.delay("autosave", 2.0, () -> System.out.println("Auto-saved!"));
@@ -41,9 +44,10 @@ public class Demo {
 
 ---
 
-## 📑 Table of Contents
+## Table of Contents
 
 - [Why FastExecution?](#why-fastexecution)
+- [Quick Start](#quick-start)
 - [Key Features](#key-features)
 - [Performance Benchmarks](#performance-benchmarks)
 - [FastJava Native Memory & Hardware Substrate](#fastjava-native-memory--hardware-substrate)
